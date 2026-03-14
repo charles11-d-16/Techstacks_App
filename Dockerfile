@@ -17,6 +17,8 @@ RUN apt-get update \
         gnupg \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) gd mbstring exif pcntl bcmath zip \
+    && pecl install mongodb \
+    && docker-php-ext-enable mongodb \
     && rm -rf /var/lib/apt/lists/*
 
 # Composer
