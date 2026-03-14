@@ -37,6 +37,9 @@ COPY . .
 # PHP deps (artisan exists after full copy)
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-progress
 
+# Public storage symlink for uploaded files
+RUN ln -sfn /var/www/html/storage/app/public /var/www/html/public/storage
+
 # Node deps
 RUN if [ -f package-lock.json ]; then npm ci; \
     elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm && pnpm install; \
