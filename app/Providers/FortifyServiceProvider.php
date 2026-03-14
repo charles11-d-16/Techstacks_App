@@ -16,6 +16,8 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
+use Laravel\Fortify\Contracts\LoginResponse;
+use Laravel\Fortify\Contracts\LogoutResponse;
 use Laravel\Fortify\Contracts\RegisterResponse;
 use Laravel\Fortify\Features;
 use Laravel\Fortify\Fortify;
@@ -47,6 +49,22 @@ class FortifyServiceProvider extends ServiceProvider
     {
         Fortify::resetUserPasswordsUsing(ResetUserPassword::class);
         Fortify::createUsersUsing(CreateNewUser::class);
+        $this->app->singleton(LoginResponse::class, function () {
+            return new class implements LoginResponse {
+                public function toResponse($request)
+                {
+                    return redirect()->intended(config('fortify.home'));
+                }
+            };
+        });
+        $this->app->singleton(LogoutResponse::class, function () {
+            return new class implements LogoutResponse {
+                public function toResponse($request)
+                {
+                    return redirect()->route('login');
+                }
+            };
+        });
         $this->app->singleton(RegisterResponse::class, function () {
             return new class implements RegisterResponse {
                 public function toResponse($request)
