@@ -53,7 +53,7 @@ class FortifyServiceProvider extends ServiceProvider
             return new class implements LoginResponse {
                 public function toResponse($request)
                 {
-                    return redirect()->intended(config('fortify.home'));
+                    return Inertia::location(redirect()->intended(config('fortify.home'))->getTargetUrl());
                 }
             };
         });
@@ -61,7 +61,7 @@ class FortifyServiceProvider extends ServiceProvider
             return new class implements LogoutResponse {
                 public function toResponse($request)
                 {
-                    return redirect()->route('login');
+                    return Inertia::location(route('login'));
                 }
             };
         });
