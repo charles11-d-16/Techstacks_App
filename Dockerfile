@@ -10,6 +10,7 @@ RUN apt-get update \
         libpng-dev \
         libjpeg-dev \
         libfreetype6-dev \
+        libssl-dev \
         libzip-dev \
         libonig-dev \
         libxml2-dev \
