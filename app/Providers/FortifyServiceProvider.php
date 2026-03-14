@@ -73,7 +73,7 @@ class FortifyServiceProvider extends ServiceProvider
                     $request->session()->invalidate();
                     $request->session()->regenerateToken();
 
-                    return redirect()->route('login');
+                    return Inertia::location(route('login'));
                 }
             };
         });

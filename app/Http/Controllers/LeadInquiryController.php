@@ -200,9 +200,14 @@ class LeadInquiryController extends Controller
         $inquiry->save();
         $this->createInitialStatusHistory($request, $inquiry, Carbon::now());
 
-        return redirect()
-            ->route('leads.inquiries.status', ['statusKey' => 'new-inquiry'])
-            ->with('success', sprintf('Successfully Added %s Leads', (string) $inquiry->inquiry_id));
+        $request->session()->flash(
+            'success',
+            sprintf('Successfully Added %s Leads', (string) $inquiry->inquiry_id),
+        );
+
+        return Inertia::location(
+            route('leads.inquiries.status', ['statusKey' => 'new-inquiry']),
+        );
     }
 
     public function import(Request $request)
@@ -289,9 +294,14 @@ class LeadInquiryController extends Controller
             $this->createInitialStatusHistory($request, $inquiry, $now);
         }
 
-        return redirect()
-            ->route('leads.inquiries.status', ['statusKey' => 'new-inquiry'])
-            ->with('success', sprintf('Successfully Import %d Leads', count($prepared)));
+        $request->session()->flash(
+            'success',
+            sprintf('Successfully Import %d Leads', count($prepared)),
+        );
+
+        return Inertia::location(
+            route('leads.inquiries.status', ['statusKey' => 'new-inquiry']),
+        );
     }
 
     public function downloadImportTemplate()
