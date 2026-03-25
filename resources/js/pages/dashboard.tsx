@@ -1,6 +1,8 @@
 import { Head, Link, router } from '@inertiajs/react';
+import { formatDateRange } from 'little-date';
 import {
     CheckCircle2,
+    ChevronDown,
     ChevronLeft,
     ChevronRight,
     MoreHorizontal,
@@ -8,8 +10,10 @@ import {
     Trash2,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import type { DateRange } from 'react-day-picker';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
@@ -29,6 +33,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
     Select,
     SelectContent,
@@ -279,6 +284,7 @@ const buildSmoothLinePath = (points: Array<{ x: number; y: number }>) => {
 
 export default function Dashboard({
     cards,
+    dateRange,
     statusRows,
     newTrend,
     statusTimeline,
@@ -290,6 +296,10 @@ export default function Dashboard({
         in_progress: number;
         completed: number;
         cancelled: number;
+    };
+    dateRange: {
+        from: string;
+        to: string;
     };
     statusRows: DashboardRow[];
     newTrend: TrendSeries;
@@ -313,6 +323,18 @@ export default function Dashboard({
     const [moveState, setMoveState] = useState<MoveState | null>(null);
     const [moveNotes, setMoveNotes] = useState('');
     const [moving, setMoving] = useState(false);
+    const [range, setRange] = useState<DateRange | undefined>(() => {
+        const parseYmd = (value: string): Date => {
+            const [year, month, day] = value.split('-').map((part) => Number(part));
+            return new Date(year, (month ?? 1) - 1, day ?? 1);
+        };
+
+        if (dateRange?.from && dateRange?.to) {
+            return { from: parseYmd(dateRange.from), to: parseYmd(dateRange.to) };
+        }
+
+        return undefined;
+    });
     const [chartTheme, setChartTheme] = useState({
         background: '#ffffff',
         foreground: '#111827',
@@ -449,6 +471,67 @@ export default function Dashboard({
         return () => observer.disconnect();
     }, []);
 
+    useEffect(() => {
+        if (!dateRange?.from || !dateRange?.to) {
+            return;
+        }
+
+        const parseYmd = (value: string): Date => {
+            const [year, month, day] = value.split('-').map((part) => Number(part));
+            return new Date(year, (month ?? 1) - 1, day ?? 1);
+        };
+
+        const nextFrom = parseYmd(dateRange.from);
+        const nextTo = parseYmd(dateRange.to);
+        const currentFrom = range?.from;
+        const currentTo = range?.to;
+
+        if (
+            currentFrom &&
+            currentTo &&
+            currentFrom.toDateString() === nextFrom.toDateString() &&
+            currentTo.toDateString() === nextTo.toDateString()
+        ) {
+            return;
+        }
+
+        setRange({ from: nextFrom, to: nextTo });
+        // Intentionally depend only on server-provided range so we don't overwrite the user's in-progress selection.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dateRange.from, dateRange.to]);
+
+    useEffect(() => {
+        if (!range?.from || !range?.to) {
+            return;
+        }
+
+        const formatYmd = (value: Date): string => {
+            const year = value.getFullYear();
+            const month = String(value.getMonth() + 1).padStart(2, '0');
+            const day = String(value.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        };
+
+        const fromYmd = formatYmd(range.from);
+        const toYmd = formatYmd(range.to);
+
+        if (fromYmd === dateRange.from && toYmd === dateRange.to) {
+            return;
+        }
+
+        router.get(
+            dashboard().url,
+            { from: fromYmd, to: toYmd },
+            {
+                preserveScroll: true,
+                preserveState: true,
+                replace: true,
+                // Keep radar + status updates area independent from the date filter.
+                only: ['cards', 'dateRange', 'statusRows'],
+            },
+        );
+    }, [range?.from, range?.to, dateRange.from, dateRange.to]);
+
     const toggleRowSelection = (rowId: string, checked: boolean) => {
         setSelectedIds((prev) => {
             if (checked) {
@@ -525,7 +608,7 @@ export default function Dashboard({
                     setMoveState(null);
                     setMoveNotes('');
                     router.reload({
-                        only: ['cards', 'statusRows', 'newTrend', 'statusTimeline'],
+                        only: ['cards', 'dateRange', 'statusRows', 'newTrend', 'statusTimeline'],
                     });
                 },
             },
@@ -687,6 +770,34 @@ export default function Dashboard({
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Dashboard" />
             <div className="flex h-full flex-1 flex-col gap-4 overflow-x-auto rounded-xl p-4">
+                <div className="flex items-center justify-end">
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="outline"
+                                id="dashboard-dates"
+                                className="h-10 w-20px max-w-xs justify-between rounded-xl border-border/70 bg-background/80 px-4 font-medium shadow-sm hover:bg-muted/20"
+                            >
+                                {range?.from && range?.to
+                                    ? formatDateRange(range.from, range.to, {
+                                          includeTime: false,
+                                      })
+                                    : 'Pick a date'}
+                                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent
+                            className="w-auto overflow-hidden rounded-2xl border-border/70 bg-background p-0 shadow-xl"
+                            align="end"
+                        >
+                            <Calendar
+                                mode="range"
+                                selected={range}
+                                onSelect={(nextRange) => setRange(nextRange)}
+                            />
+                        </PopoverContent>
+                    </Popover>
+                </div>
                 <div className="grid auto-rows-min gap-3 md:grid-cols-5">
                     {statusCards.map((card) => (
                         <div

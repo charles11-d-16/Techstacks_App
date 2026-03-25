@@ -6,6 +6,7 @@ use App\Models\Inquiry;
 use App\Models\LeadStatusHistory;
 use App\Models\StatusHistory;
 use DateTimeInterface;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Carbon;
 use Inertia\Inertia;
@@ -15,14 +16,25 @@ use MongoDB\BSON\UTCDateTime;
 
 class DashboardController extends Controller
 {
-    public function __invoke(): Response
+    public function __invoke(Request $request): Response
     {
+        [$from, $to] = $this->resolveDashboardDateRange($request);
+
         $inquiries = Inquiry::query()
             ->orderByDesc('status_date')
             ->orderByDesc('inquiry_date')
             ->get();
 
         $rows = $inquiries
+            ->filter(function (Inquiry $inquiry) use ($from, $to): bool {
+                $date = $this->toCarbon($inquiry->status_date ?? $inquiry->inquiry_date ?? null);
+
+                if (! $date) {
+                    return false;
+                }
+
+                return $date->greaterThanOrEqualTo($from) && $date->lessThanOrEqualTo($to);
+            })
             ->map(fn (Inquiry $inquiry): array => [
                 'id' => (string) $inquiry->getKey(),
                 'inquiry_id' => (string) ($inquiry->inquiry_id ?? ''),
@@ -36,6 +48,10 @@ class DashboardController extends Controller
             ->values();
 
         return Inertia::render('dashboard', [
+            'dateRange' => [
+                'from' => $from->toDateString(),
+                'to' => $to->toDateString(),
+            ],
             'cards' => [
                 'total' => $rows->count(),
                 'new' => $rows->where('status', 'New')->count(),
@@ -49,19 +65,53 @@ class DashboardController extends Controller
                 'cancelled' => $rows->where('status', 'Cancelled')->count(),
             ],
             'statusRows' => $rows,
+            // These charts are intentionally NOT filtered by the dashboard date picker.
             'newTrend' => $this->buildNewTrend(),
             'statusTimeline' => $this->buildStatusTimeline(),
         ]);
     }
 
-    private function buildNewTrend(): array
+    private function resolveDashboardDateRange(Request $request): array
+    {
+        $fromRaw = trim((string) $request->query('from', ''));
+        $toRaw = trim((string) $request->query('to', ''));
+
+        $fallbackTo = Carbon::now();
+        $fallbackFrom = $fallbackTo->copy()->subDays(7);
+
+        try {
+            $from = $fromRaw !== '' ? Carbon::parse($fromRaw) : $fallbackFrom;
+        } catch (\Throwable) {
+            $from = $fallbackFrom;
+        }
+
+        try {
+            $to = $toRaw !== '' ? Carbon::parse($toRaw) : $fallbackTo;
+        } catch (\Throwable) {
+            $to = $fallbackTo;
+        }
+
+        if ($from->greaterThan($to)) {
+            [$from, $to] = [$to, $from];
+        }
+
+        return [
+            $from->copy()->startOfDay(),
+            $to->copy()->endOfDay(),
+        ];
+    }
+
+    private function buildNewTrend(?Carbon $from = null, ?Carbon $to = null): array
     {
         $inquiries = Inquiry::query()->get();
         $statusHistories = StatusHistory::query()->get();
         $leadStatusHistories = LeadStatusHistory::query()->get();
-        $anchorMonth = $this->resolveTrendAnchorMonth(
-            $statusHistories->concat($leadStatusHistories),
-        );
+
+        $anchorMonth = $to
+            ? $to->copy()->startOfMonth()
+            : $this->resolveTrendAnchorMonth(
+                $statusHistories->concat($leadStatusHistories),
+            );
         $months = collect(range(5, 0, -1))
             ->map(fn (int $offset) => $anchorMonth->copy()->subMonths($offset))
             ->values();
@@ -91,6 +141,8 @@ class DashboardController extends Controller
                     $firstMonthKey,
                     $lastMonthKey,
                     $seenHistoryKeys,
+                    null,
+                    null,
                 );
             });
 
@@ -103,8 +155,44 @@ class DashboardController extends Controller
                     $firstMonthKey,
                     $lastMonthKey,
                     $seenHistoryKeys,
+                    null,
+                    null,
                 );
             });
+
+        if ($from && $to) {
+            // Re-run increment with date bounds applied, but avoid rebuilding the whole series shape.
+            $seenHistoryKeys = [];
+            $series = $monthKeys->mapWithKeys(fn (string $monthKey): array => [
+                $monthKey => ['Leads' => 0, 'Inquirer' => 0],
+            ]);
+
+            $statusHistories->each(function (StatusHistory $history) use (&$series, $firstMonthKey, $lastMonthKey, $inquiryTypes, &$seenHistoryKeys, $from, $to): void {
+                $this->incrementTrendMonthFromHistory(
+                    $series,
+                    $history,
+                    $this->resolveTrendType($history, false, $inquiryTypes),
+                    $firstMonthKey,
+                    $lastMonthKey,
+                    $seenHistoryKeys,
+                    $from,
+                    $to,
+                );
+            });
+
+            $leadStatusHistories->each(function (LeadStatusHistory $history) use (&$series, $firstMonthKey, $lastMonthKey, &$seenHistoryKeys, $from, $to): void {
+                $this->incrementTrendMonthFromHistory(
+                    $series,
+                    $history,
+                    'Leads',
+                    $firstMonthKey,
+                    $lastMonthKey,
+                    $seenHistoryKeys,
+                    $from,
+                    $to,
+                );
+            });
+        }
 
         return [
             'labels' => $months
@@ -119,15 +207,30 @@ class DashboardController extends Controller
         ];
     }
 
-    private function buildStatusTimeline(): array
+    private function buildStatusTimeline(?Carbon $from = null, ?Carbon $to = null): array
     {
         $statusHistories = StatusHistory::query()->get();
         $leadStatusHistories = LeadStatusHistory::query()->get();
         $allHistories = $statusHistories->concat($leadStatusHistories);
-        $anchorDate = $this->resolveTimelineAnchorDate($allHistories);
-        $days = collect(range(89, 0, -1))
-            ->map(fn (int $offset) => $anchorDate->copy()->subDays($offset))
-            ->values();
+
+        if ($from && $to) {
+            $endDay = $to->copy()->startOfDay();
+            $dayCount = $from->copy()->startOfDay()->diffInDays($endDay) + 1;
+
+            if ($dayCount > 90) {
+                $dayCount = 90;
+            }
+
+            $days = collect(range($dayCount - 1, 0, -1))
+                ->map(fn (int $offset) => $endDay->copy()->subDays($offset))
+                ->values();
+        } else {
+            $anchorDate = $this->resolveTimelineAnchorDate($allHistories);
+            $days = collect(range(89, 0, -1))
+                ->map(fn (int $offset) => $anchorDate->copy()->subDays($offset))
+                ->values();
+        }
+
         $dayKeys = $days->map(fn (Carbon $day) => $day->format('Y-m-d'))->values();
         $series = $dayKeys->mapWithKeys(fn (string $dayKey): array => [
             $dayKey => [
@@ -212,6 +315,8 @@ class DashboardController extends Controller
         string $firstMonthKey,
         string $lastMonthKey,
         array &$seenHistoryKeys,
+        ?Carbon $from = null,
+        ?Carbon $to = null,
     ): void
     {
         if (! $this->isNewHistoryStatus($history)) {
@@ -221,6 +326,10 @@ class DashboardController extends Controller
         $changeAt = $this->toCarbon($this->extractHistoryDate($history));
 
         if (! $changeAt) {
+            return;
+        }
+
+        if ($from && $to && ($changeAt->lt($from) || $changeAt->gt($to))) {
             return;
         }
 
