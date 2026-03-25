@@ -86,14 +86,14 @@ export default function Login({
                                 <Label htmlFor="remember">Remember me</Label>
                             </div>
 
-                            <Button
-                                type="submit"
-                                className="mt-4 w-full"
-                                tabIndex={4}
-                                disabled={processing}
-                                data-test="login-button"
-                            >
-                                {processing && <Spinner />}
+            <Button
+                type="submit"
+                className="mt-4 w-full bg-[#23d6c8] text-black hover:bg-[#1fc4b7]"
+                tabIndex={4}
+                disabled={processing}
+                data-test="login-button"
+            >
+                {processing && <Spinner />}
                                 Log in
                             </Button>
                         </div>
