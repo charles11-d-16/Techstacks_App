@@ -312,6 +312,7 @@ export default function Dashboard({
     const [deletingSelected, setDeletingSelected] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
     const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('All');
     const [type, setType] = useState('All');
     const [source, setSource] = useState('All');
     const [concern, setConcern] = useState('All');
@@ -325,6 +326,7 @@ export default function Dashboard({
     const [moveNotes, setMoveNotes] = useState('');
     const [moving, setMoving] = useState(false);
     const [exportOpen, setExportOpen] = useState(false);
+    const [exporting, setExporting] = useState(false);
     const [exportFormat, setExportFormat] = useState<'csv' | 'xlsx'>('csv');
     const [exportTitle, setExportTitle] = useState('');
     const [exportDescription, setExportDescription] = useState('');
@@ -359,6 +361,31 @@ export default function Dashboard({
         const q = search.trim().toLowerCase();
 
         return statusRows.filter((row) => {
+            if (statusFilter !== 'All') {
+                const selected = statusFilter.trim().toLowerCase();
+                const current = row.status.trim().toLowerCase();
+
+                if (selected === 'in progress') {
+                    if (
+                        ![
+                            'in progress',
+                            'in progress-active',
+                            'in progress-on hold',
+                        ].includes(current)
+                    ) {
+                        return false;
+                    }
+                } else if (selected === 'completed') {
+                    if (
+                        !['completed-successful', 'completed-unsuccessful'].includes(current)
+                    ) {
+                        return false;
+                    }
+                } else if (current !== selected) {
+                    return false;
+                }
+            }
+
             if (type !== 'All' && row.type.trim().toLowerCase() !== type.trim().toLowerCase()) {
                 return false;
             }
@@ -395,7 +422,7 @@ export default function Dashboard({
 
             return haystack.includes(q);
         });
-    }, [statusRows, search, type, source, concern]);
+    }, [statusRows, search, statusFilter, type, source, concern]);
 
     const totalPages = useMemo(() => {
         if (rowsPerPage === '100') {
@@ -779,35 +806,71 @@ export default function Dashboard({
         });
 
     const startDashboardExport = () => {
-        const origin = typeof window !== 'undefined' ? window.location.origin : '';
-        const url = new URL('/dashboard/export', origin);
+        // Use a form submit to keep the download tied to a user gesture (avoids browsers blocking download).
+        const ensureFrame = () => {
+            const existing = document.getElementById(
+                'dashboard-export-frame',
+            ) as HTMLIFrameElement | null;
 
-        url.searchParams.set('from', dateRange.from);
-        url.searchParams.set('to', dateRange.to);
-        url.searchParams.set('format', exportFormat);
-        url.searchParams.set('title', exportTitle.trim());
-        url.searchParams.set('description', exportDescription.trim());
+            if (existing) {
+                return existing;
+            }
 
-        url.searchParams.set('include_kpi', exportSections.kpi ? '1' : '0');
-        url.searchParams.set('include_completed', exportSections.completed ? '1' : '0');
-        url.searchParams.set('include_new_entries', exportSections.newEntries ? '1' : '0');
-        url.searchParams.set('include_area_status', exportSections.areaStatus ? '1' : '0');
-        url.searchParams.set('include_table', exportSections.table ? '1' : '0');
+            const iframe = document.createElement('iframe');
+            iframe.id = 'dashboard-export-frame';
+            iframe.name = 'dashboard-export-frame';
+            iframe.style.display = 'none';
+            document.body.appendChild(iframe);
+            return iframe;
+        };
+
+        const addHidden = (form: HTMLFormElement, name: string, value: string) => {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = name;
+            input.value = value;
+            form.appendChild(input);
+        };
+
+        setExporting(true);
+        setExportOpen(false);
+
+        const frame = ensureFrame();
+        frame.onload = () => {
+            window.setTimeout(() => setExporting(false), 250);
+        };
+
+        const form = document.createElement('form');
+        form.method = 'GET';
+        form.action = '/dashboard/export';
+        form.target = frame.name;
+
+        addHidden(form, 'from', dateRange.from);
+        addHidden(form, 'to', dateRange.to);
+        addHidden(form, 'format', exportFormat);
+        addHidden(form, 'title', exportTitle.trim());
+        addHidden(form, 'description', exportDescription.trim());
+
+        addHidden(form, 'include_kpi', exportSections.kpi ? '1' : '0');
+        addHidden(form, 'include_completed', exportSections.completed ? '1' : '0');
+        addHidden(form, 'include_new_entries', exportSections.newEntries ? '1' : '0');
+        addHidden(form, 'include_area_status', exportSections.areaStatus ? '1' : '0');
+        addHidden(form, 'include_table', exportSections.table ? '1' : '0');
 
         // These match the table filters only.
-        url.searchParams.set('search', search);
-        url.searchParams.set('type', type);
-        url.searchParams.set('source', source);
-        url.searchParams.set('concern', concern);
+        addHidden(form, 'search', search);
+        addHidden(form, 'type', type);
+        addHidden(form, 'source', source);
+        addHidden(form, 'concern', concern);
+        addHidden(form, 'timeline_range', timelineRange);
+        addHidden(form, 'status', statusFilter);
 
-        setExportOpen(false);
-        const link = document.createElement('a');
-        link.href = url.toString();
-        link.target = '_blank';
-        link.rel = 'noreferrer';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
+        document.body.appendChild(form);
+        form.submit();
+        form.remove();
+
+        // Fallback: if the iframe never fires load (some downloads), stop the spinner after a bit.
+        window.setTimeout(() => setExporting(false), 1500);
     };
 
     return (
@@ -1441,6 +1504,29 @@ export default function Dashboard({
                             className="w-full md:w-80"
                         />
                         <Select
+                            value={statusFilter}
+                            onValueChange={(value) => {
+                                setStatusFilter(value);
+                                setCurrentPage(1);
+                            }}
+                        >
+                            <SelectTrigger className="w-full md:w-48">
+                                <SelectValue placeholder="Status" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="All">Status</SelectItem>
+                                <SelectItem value="New">New</SelectItem>
+                                <SelectItem value="Contacted">Contacted</SelectItem>
+                                <SelectItem value="In Progress">In Progress</SelectItem>
+                                <SelectItem value="In Progress-Active">In Progress-Active</SelectItem>
+                                <SelectItem value="In Progress-On Hold">In Progress-On Hold</SelectItem>
+                                <SelectItem value="Completed">Completed</SelectItem>
+                                <SelectItem value="Completed-Successful">Completed-Successful</SelectItem>
+                                <SelectItem value="Completed-Unsuccessful">Completed-Unsuccessful</SelectItem>
+                                <SelectItem value="Cancelled">Cancelled</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Select
                             value={type}
                             onValueChange={(value) => {
                                 setType(value);
@@ -1503,6 +1589,7 @@ export default function Dashboard({
                             className="w-full md:w-9"
                             onClick={() => {
                                 setSearch('');
+                                setStatusFilter('All');
                                 setType('All');
                                 setSource('All');
                                 setConcern('All');
@@ -2046,6 +2133,7 @@ export default function Dashboard({
                             type="button"
                             variant="outline"
                             onClick={() => setExportOpen(false)}
+                            disabled={exporting}
                         >
                             Cancel
                         </Button>
@@ -2053,8 +2141,9 @@ export default function Dashboard({
                             type="button"
                             onClick={startDashboardExport}
                             className="bg-[#23d6c8] text-black hover:bg-[#1fc4b7]"
+                            disabled={exporting}
                         >
-                            Export
+                            {exporting ? 'Exporting...' : 'Export'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

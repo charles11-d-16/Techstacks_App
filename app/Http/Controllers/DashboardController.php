@@ -125,6 +125,13 @@ class DashboardController extends Controller
         // Charts are not filtered by date picker.
         $newTrend = $this->buildNewTrend();
         $statusTimeline = $this->buildStatusTimeline();
+        $timelineRange = mb_strtolower(trim((string) $request->query('timeline_range', '90d')));
+        $timelineDays = match ($timelineRange) {
+            '7d', '7', '7days', 'last7' => 7,
+            '30d', '30', '30days', 'last30' => 30,
+            default => 90,
+        };
+        $exportStatusTimeline = array_slice($statusTimeline, -$timelineDays);
 
         $includeKpi = $request->boolean('include_kpi', true);
         $includeCompleted = $request->boolean('include_completed', true);
@@ -145,13 +152,31 @@ class DashboardController extends Controller
         $type = trim((string) $request->query('type', 'All'));
         $source = trim((string) $request->query('source', 'All'));
         $concern = trim((string) $request->query('concern', 'All'));
+        $status = trim((string) $request->query('status', 'All'));
 
         $displaySource = fn (array $row): string => mb_strtolower(trim((string) $row['type'])) === 'inquirer'
             ? 'website'
             : trim((string) $row['source']);
 
         $tableRows = $rows
-            ->filter(function (array $row) use ($search, $type, $source, $concern, $displaySource): bool {
+            ->filter(function (array $row) use ($search, $type, $source, $concern, $status, $displaySource): bool {
+                if ($status !== 'All') {
+                    $selected = mb_strtolower(trim($status));
+                    $current = mb_strtolower(trim((string) ($row['status'] ?? '')));
+
+                    if ($selected === 'in progress') {
+                        if (! in_array($current, ['in progress', 'in progress-active', 'in progress-on hold'], true)) {
+                            return false;
+                        }
+                    } elseif ($selected === 'completed') {
+                        if (! in_array($current, ['completed-successful', 'completed-unsuccessful'], true)) {
+                            return false;
+                        }
+                    } elseif ($current !== $selected) {
+                        return false;
+                    }
+                }
+
                 if ($type !== 'All' && mb_strtolower(trim((string) $row['type'])) !== mb_strtolower($type)) {
                     return false;
                 }
@@ -253,7 +278,7 @@ class DashboardController extends Controller
                     $point['in_progress'] ?? 0,
                     $point['completed'] ?? 0,
                     $point['cancelled'] ?? 0,
-                ], $statusTimeline);
+                ], $exportStatusTimeline);
                 $addSheet('Area Status', ['Date', 'New', 'Contacted', 'In Progress', 'Completed', 'Cancelled'], $timelineRows);
             }
 
@@ -299,7 +324,7 @@ class DashboardController extends Controller
             $completedUnsuccessful,
             $successPercent,
             $newTrend,
-            $statusTimeline,
+            $exportStatusTimeline,
             $tableRows,
             $displaySource,
         ) {
@@ -347,7 +372,7 @@ class DashboardController extends Controller
             if ($includeAreaStatus) {
                 fputcsv($out, ['Area Status Card']);
                 fputcsv($out, ['Date', 'New', 'Contacted', 'In Progress', 'Completed', 'Cancelled']);
-                foreach ($statusTimeline as $point) {
+                foreach ($exportStatusTimeline as $point) {
                     fputcsv($out, [
                         $point['date'] ?? '',
                         $point['new'] ?? 0,

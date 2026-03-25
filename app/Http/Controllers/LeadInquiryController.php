@@ -179,7 +179,7 @@ class LeadInquiryController extends Controller
             'phone' => ['required', 'string', 'max:50'],
             'address' => ['required', 'string', 'max:500'],
             'discovery_platform' => ['required', 'string', Rule::in(['facebook', 'instagram', 'linkedIn', 'referral', 'Other'])],
-            'concern_type' => ['required', 'string', Rule::in(['proposal', 'maintenance', 'security', 'general'])],
+            'concern_type' => ['required', 'string', Rule::in(['proposal', 'maintenance', 'security', 'general', 'led wall', 'template inquiry'])],
             'message' => ['nullable', 'string', 'max:5000'],
         ]);
 
@@ -378,6 +378,8 @@ class LeadInquiryController extends Controller
             'maintenance',
             'security',
             'general',
+            'led wall',
+            'template inquiry',
         ]);
 
         $tempPath = tempnam(sys_get_temp_dir(), 'lead-import-');
@@ -978,6 +980,8 @@ class LeadInquiryController extends Controller
             str_contains($value, 'maint') => 'maintenance',
             str_contains($value, 'security') => 'security',
             str_contains($value, 'general') => 'general',
+            str_contains($value, 'led') => 'led wall',
+            str_contains($value, 'template') => 'template inquiry',
             default => null,
         };
     }

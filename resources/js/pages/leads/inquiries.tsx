@@ -448,6 +448,10 @@ export default function LeadInquiries({
                                     <SelectItem value="general">
                                         General Inquiry
                                     </SelectItem>
+                                    <SelectItem value="led wall">Led Wall</SelectItem>
+                                    <SelectItem value="template inquiry">
+                                        Template Inquiry
+                                    </SelectItem>
                                 </SelectContent>
                             </Select>
                             <Button

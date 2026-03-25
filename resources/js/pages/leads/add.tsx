@@ -250,6 +250,12 @@ export default function LeadAdd() {
                                                 <SelectItem value="general">
                                                     General Inquiry
                                                 </SelectItem>
+                                                <SelectItem value="led wall">
+                                                    Led Wall
+                                                </SelectItem>
+                                                <SelectItem value="template inquiry">
+                                                    Template Inquiry
+                                                </SelectItem>
                                             </SelectContent>
                                         </Select>
                                         {singleErrors.concern_type ? (
