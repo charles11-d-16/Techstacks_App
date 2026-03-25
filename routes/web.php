@@ -13,6 +13,7 @@ Route::inertia('/', 'welcome', [
 
 Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('dashboard', DashboardController::class)->name('dashboard');
+    Route::get('dashboard/export', [DashboardController::class, 'export'])->name('dashboard.export');
     Route::get('admin-list', AdminListController::class)->name('admin-list');
     Route::get('audit-trail/login-history', [AuditTrailController::class, 'logins'])
         ->name('audit-trail.logins');

@@ -13,6 +13,8 @@ use Inertia\Inertia;
 use Inertia\Response;
 use MongoDB\BSON\Regex;
 use MongoDB\BSON\UTCDateTime;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
 class DashboardController extends Controller
 {
@@ -68,6 +70,315 @@ class DashboardController extends Controller
             // These charts are intentionally NOT filtered by the dashboard date picker.
             'newTrend' => $this->buildNewTrend(),
             'statusTimeline' => $this->buildStatusTimeline(),
+        ]);
+    }
+
+    public function export(Request $request)
+    {
+        [$from, $to] = $this->resolveDashboardDateRange($request);
+
+        $inquiries = Inquiry::query()
+            ->orderByDesc('status_date')
+            ->orderByDesc('inquiry_date')
+            ->get();
+
+        $rows = $inquiries
+            ->filter(function (Inquiry $inquiry) use ($from, $to): bool {
+                $date = $this->toCarbon($inquiry->status_date ?? $inquiry->inquiry_date ?? null);
+
+                if (! $date) {
+                    return false;
+                }
+
+                return $date->greaterThanOrEqualTo($from) && $date->lessThanOrEqualTo($to);
+            })
+            ->map(fn (Inquiry $inquiry): array => [
+                'id' => (string) $inquiry->getKey(),
+                'inquiry_id' => (string) ($inquiry->inquiry_id ?? ''),
+                'full_name' => (string) ($inquiry->full_name ?? ''),
+                'type' => (string) ($inquiry->types ?? 'Inquirer'),
+                'status' => (string) ($inquiry->status ?? ''),
+                'source' => (string) ($inquiry->discovery_platform ?? ''),
+                'concern' => (string) ($inquiry->concern_type ?? ''),
+                'updated_at' => $this->formatDate($inquiry->status_date ?? $inquiry->inquiry_date ?? null),
+            ])
+            ->values();
+
+        $cards = [
+            'total' => $rows->count(),
+            'new' => $rows->where('status', 'New')->count(),
+            'contacted' => $rows->where('status', 'Contacted')->count(),
+            'in_progress' => $rows
+                ->whereIn('status', ['In Progress', 'In Progress-Active', 'In Progress-On Hold'])
+                ->count(),
+            'completed' => $rows
+                ->whereIn('status', ['Completed-Successful', 'Completed-Unsuccessful'])
+                ->count(),
+            'cancelled' => $rows->where('status', 'Cancelled')->count(),
+        ];
+
+        $completedSuccessful = $rows->filter(fn (array $row) => mb_strtolower(trim($row['status'])) === 'completed-successful')->count();
+        $completedUnsuccessful = $rows->filter(fn (array $row) => mb_strtolower(trim($row['status'])) === 'completed-unsuccessful')->count();
+        $completedTotal = max(1, $completedSuccessful + $completedUnsuccessful);
+        $successPercent = round(($completedSuccessful / $completedTotal) * 100, 1);
+
+        // Charts are not filtered by date picker.
+        $newTrend = $this->buildNewTrend();
+        $statusTimeline = $this->buildStatusTimeline();
+
+        $includeKpi = $request->boolean('include_kpi', true);
+        $includeCompleted = $request->boolean('include_completed', true);
+        $includeNewEntries = $request->boolean('include_new_entries', true);
+        $includeAreaStatus = $request->boolean('include_area_status', true);
+        $includeTable = $request->boolean('include_table', true);
+
+        $format = mb_strtolower(trim((string) $request->query('format', 'csv')));
+        if ($format === 'xcs') {
+            $format = 'xlsx';
+        }
+
+        $title = trim((string) $request->query('title', 'Dashboard Export'));
+        $description = trim((string) $request->query('description', ''));
+
+        // Table filters (cards/charts are independent of these, same as the UI).
+        $search = trim((string) $request->query('search', ''));
+        $type = trim((string) $request->query('type', 'All'));
+        $source = trim((string) $request->query('source', 'All'));
+        $concern = trim((string) $request->query('concern', 'All'));
+
+        $displaySource = fn (array $row): string => mb_strtolower(trim((string) $row['type'])) === 'inquirer'
+            ? 'website'
+            : trim((string) $row['source']);
+
+        $tableRows = $rows
+            ->filter(function (array $row) use ($search, $type, $source, $concern, $displaySource): bool {
+                if ($type !== 'All' && mb_strtolower(trim((string) $row['type'])) !== mb_strtolower($type)) {
+                    return false;
+                }
+
+                if ($source !== 'All' && mb_strtolower($displaySource($row)) !== mb_strtolower($source)) {
+                    return false;
+                }
+
+                if ($concern !== 'All' && mb_strtolower(trim((string) $row['concern'])) !== mb_strtolower($concern)) {
+                    return false;
+                }
+
+                if ($search === '') {
+                    return true;
+                }
+
+                $haystack = mb_strtolower(implode(' ', [
+                    (string) $row['inquiry_id'],
+                    (string) $row['full_name'],
+                    (string) $row['type'],
+                    (string) $row['status'],
+                    (string) $row['source'],
+                    (string) $row['concern'],
+                ]));
+
+                return str_contains($haystack, mb_strtolower($search));
+            })
+            ->values();
+
+        $filenameBase = 'dashboard_export_'.Carbon::now()->format('Ymd_His');
+
+        if ($format === 'xlsx') {
+            $spreadsheet = new Spreadsheet();
+            $spreadsheet->getProperties()->setTitle($title !== '' ? $title : 'Dashboard Export');
+
+            $summarySheet = $spreadsheet->getActiveSheet();
+            $summarySheet->setTitle('Summary');
+            $summaryRows = [
+                ['Title', $title],
+                ['Description', $description],
+                ['Date Range', $from->toDateString().' to '.$to->toDateString()],
+                ['Generated At', Carbon::now()->toDateTimeString()],
+            ];
+            $summarySheet->fromArray($summaryRows, null, 'A1');
+            $summarySheet->getStyle('A1:A4')->getFont()->setBold(true);
+            foreach (range('A', 'B') as $col) {
+                $summarySheet->getColumnDimension($col)->setAutoSize(true);
+            }
+
+            $addSheet = function (string $title, array $header, array $dataRows) use ($spreadsheet): void {
+                $sheet = $spreadsheet->createSheet();
+                $sheet->setTitle(mb_substr($title, 0, 31));
+                $sheet->fromArray([$header], null, 'A1');
+                if (count($dataRows) > 0) {
+                    $sheet->fromArray($dataRows, null, 'A2');
+                }
+                $sheet->getStyle('1:1')->getFont()->setBold(true);
+                foreach (range('A', chr(ord('A') + max(0, count($header) - 1))) as $col) {
+                    $sheet->getColumnDimension($col)->setAutoSize(true);
+                }
+            };
+
+            if ($includeKpi) {
+                $addSheet('KPI Card', ['Metric', 'Value'], [
+                    ['New Inquiry', $cards['new']],
+                    ['Contacted', $cards['contacted']],
+                    ['In Progress', $cards['in_progress']],
+                    ['Cancelled', $cards['cancelled']],
+                    ['Completed', $cards['completed']],
+                    ['Total', $cards['total']],
+                ]);
+            }
+
+            if ($includeCompleted) {
+                $addSheet('Completed Status', ['Metric', 'Value'], [
+                    ['Successful', $completedSuccessful],
+                    ['Unsuccessful', $completedUnsuccessful],
+                    ['Success %', $successPercent],
+                ]);
+            }
+
+            if ($includeNewEntries) {
+                $trendRows = [];
+                foreach ($newTrend['labels'] as $idx => $label) {
+                    $trendRows[] = [
+                        $label,
+                        $newTrend['leads'][$idx] ?? 0,
+                        $newTrend['inquirer'][$idx] ?? 0,
+                    ];
+                }
+                $addSheet('New Entries', ['Month', 'Leads', 'Inquirer'], $trendRows);
+            }
+
+            if ($includeAreaStatus) {
+                $timelineRows = array_map(fn (array $point) => [
+                    $point['date'] ?? '',
+                    $point['new'] ?? 0,
+                    $point['contacted'] ?? 0,
+                    $point['in_progress'] ?? 0,
+                    $point['completed'] ?? 0,
+                    $point['cancelled'] ?? 0,
+                ], $statusTimeline);
+                $addSheet('Area Status', ['Date', 'New', 'Contacted', 'In Progress', 'Completed', 'Cancelled'], $timelineRows);
+            }
+
+            if ($includeTable) {
+                $tableData = $tableRows
+                    ->map(fn (array $row) => [
+                        $row['inquiry_id'],
+                        $row['full_name'],
+                        $row['type'],
+                        $row['status'],
+                        $displaySource($row),
+                        $row['concern'],
+                        (string) ($row['updated_at'] ?? ''),
+                    ])
+                    ->all();
+                $addSheet('Table', ['Inquiry ID', 'Full Name', 'Type', 'Status', 'Source', 'Concern', 'Updated At'], $tableData);
+            }
+
+            $writer = new Xlsx($spreadsheet);
+            $filename = $filenameBase.'.xlsx';
+
+            return response()->streamDownload(function () use ($writer) {
+                $writer->save('php://output');
+            }, $filename, [
+                'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            ]);
+        }
+
+        $filename = $filenameBase.'.csv';
+
+        return response()->streamDownload(function () use (
+            $title,
+            $description,
+            $from,
+            $to,
+            $includeKpi,
+            $includeCompleted,
+            $includeNewEntries,
+            $includeAreaStatus,
+            $includeTable,
+            $cards,
+            $completedSuccessful,
+            $completedUnsuccessful,
+            $successPercent,
+            $newTrend,
+            $statusTimeline,
+            $tableRows,
+            $displaySource,
+        ) {
+            $out = fopen('php://output', 'w');
+
+            fputcsv($out, ['Title', $title]);
+            fputcsv($out, ['Description', $description]);
+            fputcsv($out, ['Date Range', $from->toDateString().' to '.$to->toDateString()]);
+            fputcsv($out, []);
+
+            if ($includeKpi) {
+                fputcsv($out, ['KPI Card']);
+                fputcsv($out, ['Metric', 'Value']);
+                fputcsv($out, ['New Inquiry', $cards['new']]);
+                fputcsv($out, ['Contacted', $cards['contacted']]);
+                fputcsv($out, ['In Progress', $cards['in_progress']]);
+                fputcsv($out, ['Cancelled', $cards['cancelled']]);
+                fputcsv($out, ['Completed', $cards['completed']]);
+                fputcsv($out, ['Total', $cards['total']]);
+                fputcsv($out, []);
+            }
+
+            if ($includeCompleted) {
+                fputcsv($out, ['Completed Status Card']);
+                fputcsv($out, ['Metric', 'Value']);
+                fputcsv($out, ['Successful', $completedSuccessful]);
+                fputcsv($out, ['Unsuccessful', $completedUnsuccessful]);
+                fputcsv($out, ['Success %', $successPercent]);
+                fputcsv($out, []);
+            }
+
+            if ($includeNewEntries) {
+                fputcsv($out, ['New Entries Card']);
+                fputcsv($out, ['Month', 'Leads', 'Inquirer']);
+                foreach ($newTrend['labels'] as $idx => $label) {
+                    fputcsv($out, [
+                        $label,
+                        $newTrend['leads'][$idx] ?? 0,
+                        $newTrend['inquirer'][$idx] ?? 0,
+                    ]);
+                }
+                fputcsv($out, []);
+            }
+
+            if ($includeAreaStatus) {
+                fputcsv($out, ['Area Status Card']);
+                fputcsv($out, ['Date', 'New', 'Contacted', 'In Progress', 'Completed', 'Cancelled']);
+                foreach ($statusTimeline as $point) {
+                    fputcsv($out, [
+                        $point['date'] ?? '',
+                        $point['new'] ?? 0,
+                        $point['contacted'] ?? 0,
+                        $point['in_progress'] ?? 0,
+                        $point['completed'] ?? 0,
+                        $point['cancelled'] ?? 0,
+                    ]);
+                }
+                fputcsv($out, []);
+            }
+
+            if ($includeTable) {
+                fputcsv($out, ['Table']);
+                fputcsv($out, ['Inquiry ID', 'Full Name', 'Type', 'Status', 'Source', 'Concern', 'Updated At']);
+                foreach ($tableRows as $row) {
+                    fputcsv($out, [
+                        $row['inquiry_id'],
+                        $row['full_name'],
+                        $row['type'],
+                        $row['status'],
+                        $displaySource($row),
+                        $row['concern'],
+                        (string) ($row['updated_at'] ?? ''),
+                    ]);
+                }
+            }
+
+            fclose($out);
+        }, $filename, [
+            'Content-Type' => 'text/csv; charset=UTF-8',
         ]);
     }
 

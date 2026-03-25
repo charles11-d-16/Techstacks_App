@@ -5,6 +5,7 @@ import {
     ChevronDown,
     ChevronLeft,
     ChevronRight,
+    Share,
     MoreHorizontal,
     RotateCw,
     Trash2,
@@ -323,6 +324,17 @@ export default function Dashboard({
     const [moveState, setMoveState] = useState<MoveState | null>(null);
     const [moveNotes, setMoveNotes] = useState('');
     const [moving, setMoving] = useState(false);
+    const [exportOpen, setExportOpen] = useState(false);
+    const [exportFormat, setExportFormat] = useState<'csv' | 'xlsx'>('csv');
+    const [exportTitle, setExportTitle] = useState('');
+    const [exportDescription, setExportDescription] = useState('');
+    const [exportSections, setExportSections] = useState({
+        kpi: true,
+        completed: true,
+        newEntries: true,
+        areaStatus: true,
+        table: true,
+    });
     const [range, setRange] = useState<DateRange | undefined>(() => {
         const parseYmd = (value: string): Date => {
             const [year, month, day] = value.split('-').map((part) => Number(part));
@@ -766,11 +778,43 @@ export default function Dashboard({
             day: 'numeric',
         });
 
+    const startDashboardExport = () => {
+        const origin = typeof window !== 'undefined' ? window.location.origin : '';
+        const url = new URL('/dashboard/export', origin);
+
+        url.searchParams.set('from', dateRange.from);
+        url.searchParams.set('to', dateRange.to);
+        url.searchParams.set('format', exportFormat);
+        url.searchParams.set('title', exportTitle.trim());
+        url.searchParams.set('description', exportDescription.trim());
+
+        url.searchParams.set('include_kpi', exportSections.kpi ? '1' : '0');
+        url.searchParams.set('include_completed', exportSections.completed ? '1' : '0');
+        url.searchParams.set('include_new_entries', exportSections.newEntries ? '1' : '0');
+        url.searchParams.set('include_area_status', exportSections.areaStatus ? '1' : '0');
+        url.searchParams.set('include_table', exportSections.table ? '1' : '0');
+
+        // These match the table filters only.
+        url.searchParams.set('search', search);
+        url.searchParams.set('type', type);
+        url.searchParams.set('source', source);
+        url.searchParams.set('concern', concern);
+
+        setExportOpen(false);
+        const link = document.createElement('a');
+        link.href = url.toString();
+        link.target = '_blank';
+        link.rel = 'noreferrer';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+    };
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Dashboard" />
             <div className="flex h-full flex-1 flex-col gap-4 overflow-x-auto rounded-xl p-4">
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-end gap-2">
                     <Popover>
                         <PopoverTrigger asChild>
                             <Button
@@ -797,6 +841,28 @@ export default function Dashboard({
                             />
                         </PopoverContent>
                     </Popover>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10 rounded-xl border-border/70 bg-background/80 shadow-sm hover:bg-muted/20"
+                        onClick={() => {
+                            setExportTitle(`Dashboard Export (${dateRange.from} - ${dateRange.to})`);
+                            setExportDescription('');
+                            setExportFormat('csv');
+                            setExportSections({
+                                kpi: true,
+                                completed: true,
+                                newEntries: true,
+                                areaStatus: true,
+                                table: true,
+                            });
+                            setExportOpen(true);
+                        }}
+                        title="Export"
+                    >
+                        <Share className="h-4 w-4" />
+                    </Button>
                 </div>
                 <div className="grid auto-rows-min gap-3 md:grid-cols-5">
                     {statusCards.map((card) => (
@@ -1426,6 +1492,8 @@ export default function Dashboard({
                                 <SelectItem value="maintenance">MaintenanceSupport</SelectItem>
                                 <SelectItem value="security">Security Consultation</SelectItem>
                                 <SelectItem value="general">General Inquiry</SelectItem>
+                                <SelectItem value="led wall">Led Wall</SelectItem>
+                                <SelectItem value="template inquiry">Template Inquiry</SelectItem>
                             </SelectContent>
                         </Select>
                         <Button
@@ -1882,6 +1950,111 @@ export default function Dashboard({
                             disabled={moving}
                         >
                             Move
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            <Dialog open={exportOpen} onOpenChange={setExportOpen}>
+                <DialogContent className="sm:max-w-lg">
+                    <DialogHeader>
+                        <DialogDescription className="text-base font-semibold text-foreground">
+                            Export Dashboard
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-3">
+                        <div className="space-y-2">
+                            <Label htmlFor="dashboard-export-title">Title</Label>
+                            <Input
+                                id="dashboard-export-title"
+                                value={exportTitle}
+                                onChange={(e) => setExportTitle(e.target.value)}
+                                placeholder="Enter title"
+                            />
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label htmlFor="dashboard-export-description">Description</Label>
+                            <textarea
+                                id="dashboard-export-description"
+                                value={exportDescription}
+                                onChange={(e) => setExportDescription(e.target.value)}
+                                placeholder="Enter description"
+                                rows={3}
+                                className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex w-full rounded-md border bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:ring-[3px]"
+                            />
+                        </div>
+
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Format</Label>
+                                <Select
+                                    value={exportFormat}
+                                    onValueChange={(value) =>
+                                        setExportFormat(value === 'xlsx' ? 'xlsx' : 'csv')
+                                    }
+                                >
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue placeholder="Select format" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="csv">CSV</SelectItem>
+                                        <SelectItem value="xlsx">XLSX</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Includes</Label>
+                                <div className="space-y-2 rounded-lg border border-border/70 p-3">
+                                    {[
+                                        { key: 'kpi', label: 'KPI Card' },
+                                        { key: 'completed', label: 'Completed Status Card' },
+                                        { key: 'newEntries', label: 'New Entries Card' },
+                                        { key: 'areaStatus', label: 'Area Status Card' },
+                                        { key: 'table', label: 'Table' },
+                                    ].map((item) => (
+                                        <div
+                                            key={item.key}
+                                            className="flex items-center justify-between gap-3"
+                                        >
+                                            <span className="text-sm font-medium">
+                                                {item.label}
+                                            </span>
+                                            <Checkbox
+                                                checked={
+                                                    exportSections[
+                                                        item.key as keyof typeof exportSections
+                                                    ]
+                                                }
+                                                onCheckedChange={(checked) =>
+                                                    setExportSections((prev) => ({
+                                                        ...prev,
+                                                        [item.key]: checked === true,
+                                                    }))
+                                                }
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setExportOpen(false)}
+                        >
+                            Cancel
+                        </Button>
+                        <Button
+                            type="button"
+                            onClick={startDashboardExport}
+                            className="bg-[#23d6c8] text-black hover:bg-[#1fc4b7]"
+                        >
+                            Export
                         </Button>
                     </DialogFooter>
                 </DialogContent>
